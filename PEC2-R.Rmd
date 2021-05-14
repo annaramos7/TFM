@@ -1,0 +1,309 @@
+---
+title: "PEC2-FeatureCounts"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## FeatureCounts complete
+
+We already obtain the data from featureCounts through command line. Now, we introduce the counts in R to start analyzing the data. We also introduce GeneID for row names and delete the columns from 1 to 6. Finally we obtain only the counts for each replicate of each cell line, related to the different genes. 
+
+```{r}
+dir <- setwd("/Users/annar/Documents/ordenadorAle/Anna/TFM/")
+fc <- read.table("/Users/annar/Documents/ordenadorAle/Anna/TFM/counts_bladder.txt", skip = 1, header = TRUE)
+rownames(fc) <- fc$Geneid
+counts <- fc[,-1:-6]
+counts[1:5,1:6]
+```
+
+On the previous data we can observe the first 5 genes counts for the cell line 5637. In this case, it appears some mistakes in the names of the columns. We will change the name of the columns, to delete the X appearing in 5637 cells and delete the point from HT.1376, to avoid data analysis.  
+
+```{r}
+names(counts)[1] <- "5637_si270_1"
+names(counts)[2] <- "5637_si270_2"
+names(counts)[3] <- "5637_si270_3"
+names(counts)[4] <- "5637_siCtrl438_1"
+names(counts)[5] <- "5637_siCtrl438_2"
+names(counts)[6] <- "5637_siCtrl438_3"
+names(counts)[13] <- "HT1376_si270_1"
+names(counts)[14] <- "HT1376_si270_2"
+names(counts)[15] <- "HT1376_si270_3"
+names(counts)[16] <- "HT1376_siCtrl438_1"
+names(counts)[17] <- "HT1376_siCtrl438_2"
+names(counts)[18] <- "HT1376_siCtrl438_3"
+counts[1:5,]
+nrow(counts)
+```
+
+`counts` dataset contains the information about the genes, identified by RefSeq categories. In this case, we can observe NM or NR, mRNA or ncRNA respectively. The rest of the columns contain the lecture numbers aligned to the gen on each sample. We have three replicates for each treatment of each cell line and 37802 genes analysed. 
+
+`sampleTable` contains the basic information about the samples, we need for the analysis. 
+
+```{r}
+sampleTable <- read.csv("/Users/annar/Documents/ordenadorAle/Anna/TFM/sample_table.csv", sep=";", row.names = 1)
+#sampleTable <- sampleTable[-13:-18,]
+sampleTable
+```
+
+We are going to comprove that the names of the columns for `counts` and the rows of `sampleTable` are the same. 
+
+```{r}
+table(colnames(counts)==rownames(sampleTable))
+```
+
+
+## Data filtration and Normalization
+
+The data obtained from RNA-seq needs to be pre-processed in various ways before being analyzed. We must do a previous exploration and another quality control of the data, before we can perform the analysis. It is important to check whether the data are of sufficient quality for normalization and analysis.
+
+Genes with very low counts provide little evidence for differential expression and interfere with some of the statistical approaches. These add "noise", reducing "statistical power" in the detection of differentially expressed genes. These genes must be filtered before further analysis.
+
+In this case we are going to filter poorly expressed genes. We only keep those that express above 0.5 in a count per million (CPM) in all replicates. In this case, a CPM of 0.5 is used as it corresponds to a "count per gene" of 10-15, as it corresponds to a count of 10-15 for the library sizes in this data set. As a general rule, a good threshold can be chosen by identifying the CPM that corresponds to a count of 10. 
+
+We will use the cpm function of the `edgeR` package to generate CPM values and then filter. When we are converting to CPM, we are normalizing according to the "Sequencing depth" of each sample. It is important not to analyze a large mass of genes. For this reason, we must discard those that are not going to be differentially expressed.
+
+```{r, message=FALSE, warning=FALSE}
+library(edgeR)
+#Obtain CPMs
+myCPM <- cpm(counts)
+# Which values in myCPM are greater than 0.5.
+thresh <- myCPM > 0.5
+# Summary of how many TRUEs there are in each row
+table(rowSums(thresh))
+#Keep genes with at least 0.5 cpm in all replicates
+keep <- rowSums(thresh) >= 18
+# Subset the rows of counts to keep the more highly expressed genes
+counts.keep <- counts[keep,]
+summary(keep)
+```
+
+There are 8524 genes with at least 0.5 cpm in all replicates. 
+
+Next, we will create a `DGEList` object. `edgeR` package stores data in a simple list-based data object called `DGEList`. The main components of a `DGEList` object are an array of counts read, sample information in the data.frame, and optional genetic annotation.
+
+```{r}
+dgeObj <- DGEList(counts.keep)
+dgeObj
+dgeObj$samples
+```
+
+Normalization is a process designed to identify and eliminate systematic technical differences between samples that occur in the data to ensure that technical bias has minimal impact on the results. The general strategy with normalization is to choose a suitable baseline and express the sample counts relative to that baseline.
+
+Normalization by trimmed mean of M (TMM) values is performed by the `calcNormFactors` function, which returns the `DGEList` argument only with the `norm.factors` changed. Computes a set of normalization factors, one for each sample, to eliminate compositions biases between libraries. 
+
+```{r}
+dgeObj <- calcNormFactors(dgeObj)
+dgeObj
+```
+
+A normalization factor below one indicates that a small number of high-count genes are monopolizing the sequencing, making the counts of other genes lower than would be usual given the size of the library. As a result, the effective size of the library will be reduced for that sample.
+
+
+## Data visualization
+
+Now that we have eliminated the low expression genes and we have stored our counts in a `DGEList` object, we are going to carry out some graphs that allow us to make a small report of them.
+
+The counting data now is distributed according to a Normal Distribution, so if we want to examine the distributions of the raw counts, we will use Boxplots to verify the distribution of the read counts in log2 scale. We can use the cpm function to get log2 counts per million, corrected for library sizes. The cpm function also incorporates a small "modification" to avoid the problem associated with logarithm values of zero.
+
+```{r}
+# Get log2 counts per million
+logcounts <- cpm(dgeObj,log=TRUE)
+# Check distributions of samples using boxplots
+par(mar=c(10, 4.3, 4.3, 8.1), xpd=TRUE)
+boxplot(logcounts, xlab="", ylab="Log2 counts per million",las=2, col=c(rep("cornflowerblue",3), rep("cadetblue2",3),rep("bisque1",3), rep("salmon",3),rep("darkseagreen1",3), rep("darkseagreen4",3)))
+# Let's add a red horizontal line that corresponds to the median logCPM
+legend("topright", inset = c(-0.7,0), legend=c("siKMT9 5637", "siCtrl 5637","siKMT9 CAL-29", "siCtrl CAL-29", "siKMT9 HT-1376", "siCtrl HT-1376"), fill=c("cornflowerblue","cadetblue2","bisque1","salmon", "darkseagreen1", "darkseagreen4"))
+abline(h=median(logcounts),col="red")
+title("Boxplots of logCPMs (normalised)")
+```
+
+From the boxplots, we see that, in general, the distributions of the counting data are really similar and there is not much difference between groups.
+
+**Multidimensional scaling plots**
+
+One of the most important graphs in Quality control is the MDS. `MDSplot` is a multidimensional scale plot of the RandomForest proximity matrix. In other words, `MDSplot` is a graph, which allows us to "visualize" variability in the data. In the MDS plot, the distance between each pair of samples can be interpreted as the major logarithmic fold change between samples for the genes that best distinguish samples.
+
+```{r, message=FALSE, warning=FALSE}
+plotMDS(dgeObj, pch=19, col=c(rep("cornflowerblue",3), rep("cadetblue2",3),rep("bisque1",3), rep("salmon",3),rep("darkseagreen1",3), rep("darkseagreen4",3)))
+legend("top", legend=c("siKMT9 5637", "siCtrl 5637","siKMT9 CAL-29", "siCtrl CAL-29", "siKMT9 HT-1376", "siCtrl HT-1376"),fill=c("cornflowerblue","cadetblue2","bisque1","salmon", "darkseagreen1", "darkseagreen4"))
+```
+
+We see that the variability of our experiment is controlled correctly, since we observe that the data have been grouped by treatment and cell lines. We observe 5637 cell line distributed at left-part of the graph and Cal-29 at the right-part of the graph. Control siRNA data is located on the top-part of the graph and KMT9 siRNA is located on the bottom-part of the graph. Nevertheless, the data related to HT-1376, we can observe that there are no huge differences between Ctrl and Knockdown. 
+
+**Principal component analysis**
+
+Something similar to what has been observed previously, can be studied by means of a principal component analysis (PCA). We must do a component analysis since many of the explanatory variables are highly correlated, and these do not allow us to do multivariate analysis. PCA allows us to reduce to a lower number of transformed variables that better explain the variability of the data.
+
+Each principal component generated by PCA will be a linear combination of the original variables. The first main component of the observations is the linear combination of the original variables whose sample variance is greater among all the possible linear combinations. The second principal component is defined as the linear combination of the original variables that represents a maximum proportion of the remaining variance subject to not being correlated with the first principal component.
+
+`DESeq2` package has a function for plotting PCA plots, that uses `ggplot2` under the hood. Nevertheless, we have to create a *DESeqDataSet* through `DESeqDataSetFromMatrix`, including the counts filtered previously as *counts.keep* and the table of sample information called *sampleTable* and the design indicates how to model the samples. 
+
+
+```{r, message=FALSE, warning=FALSE}
+library(DESeq2)
+sampleTable1 <- sampleTable
+sampleTable1$cell <- as.factor(sampleTable1$cell)
+sampleTable1$treat <- as.factor(sampleTable1$treat)
+str(sampleTable1)
+dds <- DESeqDataSetFromMatrix(countData = as.matrix(counts.keep),
+                    colData= sampleTable1,
+                            design= ~ treat + cell)
+dds <- DESeq(dds)
+```
+
+Now we transform and obtain an object of class *DESeqTransform*.  The running times are shorter when using `blind=FALSE`.
+
+```{r, message=FALSE, warning=FALSE}
+library(ggplot2)
+keep <- rowSums(counts(dds)) >= 18 #we obtain same results because the counts were already filtered
+dds <- dds[keep,]
+dds$treat <- droplevels(dds$treat)
+vsd <- vst(dds, blind=FALSE)
+pcaData <- plotPCA(vsd, intgroup=c("cell", "treat"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggplot(pcaData, aes(PC1, PC2, color=cell, shape=treat)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed()
+```
+
+The graph above shows the first two main components belonging to our 9 original samples. We observe that PC1 contains 70% variance and PC2 27% variance. Therefore, in total with only the first two components we are covering 97% of the variability of the sample, which is very explanatory. As we observed with `plotMDS` 5637 and Cal-29 cell line are distributed at left-part of the graph, but cAL-29 data is located on the top of the graph and 5637 data is located on the bottom of the graph. Nevertheless, the data related to HT-1376, we can observe that there are no huge differences between Ctrl and Knockdown. In our analysis we should see that the main source of variation is due to biological effects and not technical variation. In this case, we can not observe huge differences between samples from HT-1376. 
+
+
+**Heat Map**
+
+Below we show the representation of the hierarchical cluster of the samples, specifically, in this example, the matrix of Euclidean distances of the logCPM (logcounts object) is graphed (from the average method) for the 500 most variable genes.
+
+```{r}
+# We estimate the variance for each row in the logcounts matrix
+var_genes <- apply(logcounts, 1, var)
+head(var_genes)
+# Get the gene names for the top 500 most variable genes
+select_var <- names(sort(var_genes, decreasing=TRUE))[1:500]
+head(select_var)
+# Subset logcounts matrix
+highly_variable_lcpm <- logcounts[select_var,]
+dim(highly_variable_lcpm)
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+library(EBImage)
+library(GiNA)
+library(gplots)
+## Get some nicer colours
+mypalette <- brewer.pal(11,"RdYlBu")
+morecols <- colorRampPalette(mypalette)
+# Set up colour vector for celltype variable
+col.cell <- c("purple","orange")[sampleTable$cell]
+
+# Plot the heatmap
+par(mar=c(1,1,1,1))
+heatmap.2(highly_variable_lcpm,col=rev(morecols(50)),trace="none", main="Top 500 most variable genes across samples",ColSideColors=col.cell,scale="row", margins = c(10,10))
+```
+
+In the previous figure we have a color map of the distances (Euclidean) between the samples. We also observe at the edge of the figure the different hierarchical groupings between samples. We can observe that there are differences between cell lines, but mostly between HT-1376 and the other two; 5637 and CAL-29. Nevertheless, our interest should be focus on the differences between treatment in each cell line, and can explain the block in the proliferation of bladder cancer cell lines. 
+
+
+
+
+On the following lines I will show the results without the presence of HT-1376. 
+```{r}
+sampleTable <- sampleTable[-13:-18,]
+counts <- counts[,1:12]
+
+#Obtain CPMs
+myCPM <- cpm(counts)
+# Which values in myCPM are greater than 0.5.
+thresh <- myCPM > 0.5
+#Keep genes with at least 0.5 cpm in all replicates
+keep <- rowSums(thresh) >= 12
+# Subset the rows of counts to keep the more highly expressed genes
+counts.keep <- counts[keep,]
+summary(keep)
+
+dgeObj <- DGEList(counts.keep)
+dgeObj
+dgeObj <- calcNormFactors(dgeObj)
+dgeObj
+```
+
+**Data Visualitation** 
+
+```{r}
+# Get log2 counts per million
+logcounts <- cpm(dgeObj,log=TRUE)
+# Check distributions of samples using boxplots
+par(mar=c(10, 4.3, 4.3, 8.1), xpd=TRUE)
+boxplot(logcounts, xlab="", ylab="Log2 counts per million",las=2, col=c(rep("cornflowerblue",3), rep("cadetblue2",3),rep("bisque1",3), rep("salmon",3)))
+# Let's add a red horizontal line that corresponds to the median logCPM
+legend("topright", inset = c(-0.7,0), legend=c("siKMT9 5637", "siCtrl 5637","siKMT9 CAL-29", "siCtrl CAL-29"), fill=c("cornflowerblue","cadetblue2","bisque1","salmon"))
+abline(h=median(logcounts),col="red")
+title("Boxplots of logCPMs (normalised)")
+```
+
+
+**Multidimensional scaling plots**
+
+```{r, message=FALSE, warning=FALSE}
+plotMDS(dgeObj, pch=19, col=c(rep("cornflowerblue",3), rep("cadetblue2",3),rep("bisque1",3), rep("salmon",3)))
+legend("top", legend=c("siKMT9 5637", "siCtrl 5637","siKMT9 CAL-29", "siCtrl CAL-29", "siKMT9 HT-1376", "siCtrl HT-1376"),fill=c("cornflowerblue","cadetblue2","bisque1","salmon"))
+```
+
+**Principal component analysis**
+
+```{r, message=FALSE, warning=FALSE}
+sampleTable1 <- sampleTable
+sampleTable1$cell <- as.factor(sampleTable1$cell)
+sampleTable1$treat <- as.factor(sampleTable1$treat)
+str(sampleTable1)
+dds <- DESeqDataSetFromMatrix(countData = as.matrix(counts.keep),
+                    colData= sampleTable1,
+                            design= ~ treat + cell)
+dds <- DESeq(dds)
+
+keep <- rowSums(counts(dds)) >= 12 #we obtain same results because the counts were already filtered
+dds <- dds[keep,]
+dds$treat <- droplevels(dds$treat)
+vsd <- vst(dds, blind=FALSE)
+pcaData <- plotPCA(vsd, intgroup=c("cell", "treat"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggplot(pcaData, aes(PC1, PC2, color=cell, shape=treat)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed()
+```
+
+
+**Heat Map**
+
+```{r}
+# We estimate the variance for each row in the logcounts matrix
+var_genes <- apply(logcounts, 1, var)
+head(var_genes)
+# Get the gene names for the top 500 most variable genes
+select_var <- names(sort(var_genes, decreasing=TRUE))[1:500]
+head(select_var)
+# Subset logcounts matrix
+highly_variable_lcpm <- logcounts[select_var,]
+dim(highly_variable_lcpm)
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+## Get some nicer colours
+mypalette <- brewer.pal(11,"RdYlBu")
+morecols <- colorRampPalette(mypalette)
+# Set up colour vector for celltype variable
+col.cell <- c("purple","orange")[sampleTable$cell]
+# Plot the heatmap
+par(mar=c(1,1,1,1))
+heatmap.2(highly_variable_lcpm,col=rev(morecols(50)),trace="none", main="Top 500 most variable genes across samples",ColSideColors=col.cell,scale="row", margins = c(10,10))
+```
