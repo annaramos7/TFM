@@ -1,0 +1,442 @@
+---
+title: "Final Master Project"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data visualization
+
+##3.3.4. R studio - Normalization, Filtration and Visualization.
+
+Once obtained the data from featureCounts through command line, we introduce the count table in R to start analysing the data. We have to introduce GeneID in the row names with rownames function and delete the columns 1 to 6 (geneid – length). Finally, we obtain only the counts for each replicate of each cell line, related to the different genes.
+
+```{r}
+dir <- setwd("/Users/annar/Documents/ordenadorAle/Anna/TFM/")
+
+fc <- read.table("/Users/annar/Documents/ordenadorAle/Anna/TFM/counts_bladder.txt", skip = 1, header = TRUE)
+rownames(fc) <- fc$Geneid
+counts <- fc[,-1:-6]
+counts <- counts[,1:12]
+counts[1:5,1:6]
+```
+
+On the previous data we can observe the first 5 genes counts for the cell line 5637. In this case, it appears some mistakes in the names of the columns. We will change the name of the columns, to delete the X appearing in 5637 cells and delete the point from HT.1376, to avoid data analysis.  
+
+```{r}
+names(counts)[1] <- "5637_si270_1"
+names(counts)[2] <- "5637_si270_2"
+names(counts)[3] <- "5637_si270_3"
+names(counts)[4] <- "5637_siCtrl438_1"
+names(counts)[5] <- "5637_siCtrl438_2"
+names(counts)[6] <- "5637_siCtrl438_3"
+counts[1:5,]
+nrow(counts)
+```
+
+The `counts` dataset contains the information about the genes, related to RefSeq categories. In this case, we can observe NM or NR, according to mRNA or ncRNA respectively. The rest of the columns contain the lecture numbers aligned to the gen on each sample. We have three replicates for each treatment of each cell line and 37802 genes were analysed. 
+
+`sampleTable` contains the basic information about the samples, we need for the analysis. 
+
+```{r}
+sampleTable <- read.csv("/Users/annar/Documents/ordenadorAle/Anna/TFM/sample_table.csv", sep=";", row.names = 1)
+#sampleTable <- read.csv("/Users/annaramos/Downloads/sample_table.csv", sep=";", row.names = 1)
+sampleTable <- sampleTable[-13:-18,]
+sampleTable
+```
+
+We are going to comprove that the names of the columns for `counts` and the rows of `sampleTable` are the same. 
+
+```{r}
+table(colnames(counts)==rownames(sampleTable))
+```
+
+
+### 3.3.4.1. Data filtration and Normalization
+
+The data obtained from RNA-seq needs to be pre-processed in various ways before being analysed. We must do a previous exploration and another quality control of the data, before we can perform the analysis. It is important to check whether the data have enough quality for normalization and analysis.
+
+Genes with very low counts provide little evidence for differential expression and interfere with some of the statistical approaches. These add “noise”, reducing “statistical power” in the detection of differentially expressed genes. These genes must be filtered before further analysis.
+
+Next, we will create a DGEList object. edgeR package stores data in a simple list-based data object called DGEList. The main components of a DGEList object are an array of counts read, sample information in the data.frame, and optional genetic annotation. This DGEList objects can be manipulated as if they were usual lists. However, they can also be treated as matrices for different purposes. 
+
+```{r, message=FALSE, warning=FALSE}
+counts.keep <- counts[which(rowSums(counts) > 0), ]
+library(edgeR)
+dgeObj <- DGEList(counts.keep)
+dgeObj
+dgeObj$samples
+```
+
+Normalization is a process designed to identify and eliminate systematic technical differences between samples that occur in the data to ensure that technical bias has minimal impact on the results. The general strategy with normalization is to choose a suitable baseline and express the sample counts relative to that baseline.
+
+Normalization by trimmed mean of M (TMM) values is performed by the `calcNormFactors` function, which returns the `DGEList` argument only with the `norm.factors` changed. Computes a set of normalization factors, one for each sample, to eliminate compositions biases between libraries. 
+
+```{r}
+dgeObj <- calcNormFactors(dgeObj)
+dgeObj$samples
+```
+
+A normalization factor below one indicates that a small number of high-count genes are monopolizing the sequencing, making the counts of other genes lower than would be usual given the size of the library. As a result, the effective size of the library will be reduced for that sample.
+
+### 3.3.4.2. Multidimensional scaling plots
+
+One of the most important graphs in Quality control is the MDS. `MDSplot` is a multidimensional scale plot of the RandomForest proximity matrix. In other words, `MDSplot` is a graph, which allows us to "visualize" variability in the data. In the MDS plot, the distance between each pair of samples can be interpreted as the major logarithmic fold change between samples for the genes that best distinguish samples.
+
+```{r, message=FALSE, warning=FALSE}
+plotMDS(dgeObj, pch=19, col=c(rep("cornflowerblue",3), rep("cadetblue2",3),rep("bisque1",3), rep("salmon",3)))
+legend("top", legend=c("5637 siILSE1", "5637 siCtrl","CAL-29 siILSE1", "CAL-29 siCtrl"),fill=c("cornflowerblue","cadetblue2","bisque1","salmon"))
+```
+
+We see that the variability of our experiment is controlled correctly, since we observe that the data have been grouped by treatment and cell lines (Fig. 8). We observe 5637 is distributed at left-part of the graph and CAL-29 at the right of the graph. siCtrl treatment is located on the top-part of the graph and siILSE1 treatment is located on the bottom of the graph. For both of cell lines, there are visual differences between treatments. Therefore, the distances between samples are visible. 
+
+### 3.3.4.3. Principal component analysis
+
+Something similar to what has been observed previously, can be studied by means of a principal component analysis (PCA). We must do a component analysis since many of the explanatory variables are highly correlated, and these do not allow us to do multivariate analysis. PCA allows us to reduce to a lower number of transformed variables that better explain the variability of the data.
+
+Each principal component generated by PCA will be a linear combination of the original variables. The first main component of the observations is the linear combination of the original variables whose sample variance is greater among all the possible linear combinations. The second principal component is defined as the linear combination of the original variables that represents a maximum proportion of the remaining variance subject to not being correlated with the first principal component.
+
+`DESeq2` package has a function for plotting PCA plots, that uses `ggplot2` under the hood. Nevertheless, we have to create a *DESeqDataSet* through `DESeqDataSetFromMatrix`, including the counts filtered previously as *counts.keep* and the table of sample information called *sampleTable* and the design indicates how to model the samples. 
+
+
+```{r, message=FALSE, warning=FALSE}
+library(DESeq2)
+sampleTable1 <- sampleTable
+sampleTable1$cell <- as.factor(sampleTable1$cell)
+sampleTable1$treat <- as.factor(sampleTable1$treat)
+str(sampleTable1)
+dds <- DESeqDataSetFromMatrix(countData = as.matrix(counts.keep),
+                    colData= sampleTable1,
+                            design= ~ treat + cell)
+dds <- DESeq(dds)
+```
+
+Now we transform and obtain an object of class *DESeqTransform*.  The running times are shorter when using `blind=FALSE`.
+
+```{r, message=FALSE, warning=FALSE}
+library(ggplot2)
+keep <- rowSums(counts(dds)) > 0
+dds <- dds[keep,]
+dds$treat <- droplevels(dds$treat)
+vsd <- vst(dds, blind=FALSE)
+pcaData <- plotPCA(vsd, intgroup=c("cell", "treat"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggplot(pcaData, aes(PC1, PC2, color=cell, shape=treat)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed()
+```
+
+The graph above (Fig. 9) shows the first two main components belonging to our 6 original samples. We observe that PC1 contains 90% variance and PC2 7% variance. Therefore, in total with only the first two components we are covering 97% of the variability of the sample, which is very explanatory. As we observed with plotMDS 5637 cell line are distributed at left-part of the graph, CAL-29 data is distributed at right-part of the graph. On top of the graph, we observe the siCtrl treatment and siILSE1 treatment is located on the bottom of the graph. As we observed previously, for both of cell lines, there are visual differences between treatments.
+
+
+
+# 3.4. Genes differentially expressed
+
+## 3.4.1. Design Matrix
+
+First of all, linear modeling and differential expression analysis require a design matrix. The design matrix records which treatment conditions were applied to each sample, and also defines how the experimental effects are parameterized in linear models. 
+
+In this analysis we want to test the differences between treatments: siCtrl and siILSE1 in 5637 and CAL-29. We want to know which genes are differentially expressed. We need to make a design matrix without an intercept term and create some groups. 
+
+```{r}
+group <- paste(sampleTable$totalInfo,sep=".")
+group <- factor(group)
+# Specify a design matrix without an intercept term
+design <- model.matrix(~ 0 + group)
+design
+```
+
+Each column of the design matrix refers us to the samples that correspond to each group. Samples coming from 5637 correspond to the first two columns and it contains a 1 in the matrix of counts. CAL-29 samples correspond to the third and fourth column.
+
+Since we are interested in obtaining differentially expressed genes between groups, we must specify which comparisons we want to test. Comparisons, can be specified using the `makeContrasts` function. We are interested for knowing which genes are differentially expressed between ILSE1 siRNA and Ctrl siRNA, in 5637 and CAL-29.
+
+
+```{r}
+cont.matrix <- makeContrasts(KnockvsCtrl5637= group5637untrt - group5637trt, KnockvsCtrlCAL29 = groupCAL29untrt - groupCAL29trt, levels=design)
+cont.matrix
+```
+
+### 3.4.2. Testing for differential expression
+
+We have to compare the expression levels of genes in a control condition (siCtrl) with a treatment condition (siILSE1). Genes in the two conditions will invariably be measured with different read counts. These differences will represent either true, biological differences between the two conditions, or experimental noise. Statistical models and tests are used to distinguish between the two possibilities.
+In other words, we would like to use  like to use statistical testing to decide whether, for a given gene, an observed difference in read counts is significant, that is, whether it is greater than what would be expected just due to natural random variation. 
+
+We need an object class "EList" to use the function `lmFit`. The `voom` transformation uses the experiment design matrix and produces an "EList" object.
+
+```{r}
+v <- voom(dgeObj,design)
+# Fit the linear model
+fit<-lmFit(v, design)
+fit <- lmFit(v)
+
+fit.cont <- contrasts.fit(fit, cont.matrix)
+fit.cont <- eBayes(fit.cont)
+summa.fit <- decideTests(fit.cont, p.value = 0.05, adjust.method = "BH", lfc=0.5)
+summary(summa.fit)
+```
+
+The differentially expressed genes analysis gives us for 5637 cells; 1344 downregulated genes, 2054 upregulated genes and 17731 genes not significantly differentiated. CAL-29 cells have 2193 downregulated genes, 2878 upregulated genes and 11429 genes not significantly differentiated 
+
+## 3.4.3. Annotation
+
+The identification of differentially expressed genes includes the annotation of all the genes analyzed. As we have mentioned previously, our genes have the only annotation the identification of RefSeq IDs, which is not very informative. Therefore we will have to add some additional annotation information. We are going to do this using the `org.Hs.eg.db` package. First, we will create a new data.frame from the `select` function. With this function, we are able to obtain the Symbol, gene name and EntrezID from the RefSeq ID. 
+
+```{r, message=FALSE, warning=FALSE}
+library("org.Hs.eg.db")
+library(dplyr)
+cols <- c("SYMBOL", "GENENAME", "ENTREZID")
+ann <- AnnotationDbi::select(org.Hs.eg.db, keys=rownames(fit.cont), columns=cols, keytype="REFSEQ")
+```
+
+Next, we show in `topTable` the coefficient of the model we are interested in (“ KnockvsCtrl5637” and “ KnockvsCtrlCAL29”).The `topTable` function extract a table of the top-ranked genes from a linear model fit. The p-values for the contrast are adjusted for multiple testing by `adjust.method`. BH methods controls the expected false discovery rate (FDR) below the specified value. 
+
+```{r}
+fit.cont$genes <- ann
+Diff5637_top <- topTable(fit.cont,coef="KnockvsCtrl5637",sort.by="P", p.value = 0.05, n=Inf, adjust.method = "BH", lfc=0.5)
+Diff5637 <- Diff5637_top[Diff5637_top$adj.P.Val<0.05,]
+
+DiffCAL29_top <- topTable(fit.cont,coef="KnockvsCtrlCAL29",sort.by="P", p.value = 0.05, n=Inf, adjust.method = "BH")
+DiffCAL29 <- DiffCAL29_top[DiffCAL29_top$adj.P.Val<0.05,]
+
+length(intersect(rownames(Diff5637),rownames(DiffCAL29)))
+```
+
+It is also important that from 3398 genes differentially expressed of 5637 and from 5071 genes of CAL-29, we have an intersection of 2185 (Fig.11). In other words, we have an intersection of 2185 differentially expressed genes between 5637 and CAL-29 upon ILSE1 knockdown. This 2185 genes will be used for the next enrichment analysis.
+
+### 3.4.4. Volcano Plot
+
+To display differentially expressed genes is used volcano plot. This represents the significance of each gene, measured by the least logarithm of the p-value against the change in expression detected by the fold-change. We use `EnhancedVolcano` function from `Bioconductor` Package. 
+
+We observe the 2054 upregulated genes on the right part of the graph and the 1344 downregulated genes in the left part of the graph of 5637 cells upon ILSE1 knockdown.
+
+
+```{r, message=FALSE, warning=FALSE}
+library(DESeq2)
+dds5637 <- DESeqDataSetFromMatrix(countData = as.matrix(counts.keep[,1:6]),
+                    colData= sampleTable[1:6,],
+                            design= ~ treat)
+dds5637 <- DESeq(dds5637)
+
+dds5637 <- results(dds5637, contrast = c("treat", "trt", "untrt"))
+dds5637$symbol <- ann$SYMBOL
+library("EnhancedVolcano")
+
+EnhancedVolcano(dds5637,
+    lab = dds5637$symbol,
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    title = 'Differentially expressed genes in 5637',
+    pCutoff = 10e-5,
+    FCcutoff = 2,
+    pointSize = 1.0,
+    legendLabSize = 10,
+    legendIconSize = 3.0,
+    legendPosition = "right",
+    labSize = 2,
+    shape = c(1, 4, 23, 25),
+    colAlpha = 1,
+    axisLabSize = 8,
+    titleLabSize = 15,
+    subtitleLabSize = 8, 
+    captionLabSize = 8, 
+    xlim = c(-4,4))
+```
+
+We observe the 2054 upregulated genes on the right part of the graph and the 1344 downregulated genes in the left part of the graph of 5637 cells upon ILSE1 knockdown.
+
+```{r, message=FALSE, warning=FALSE}
+ddsCAL29 <- DESeqDataSetFromMatrix(countData = as.matrix(counts.keep[,7:12]),
+                    colData= sampleTable[7:12,],
+                            design= ~ treat)
+ddsCAL29 <- DESeq(ddsCAL29)
+
+ddsCAL29 <- results(ddsCAL29, contrast = c("treat", "trt", "untrt"))
+ddsCAL29$symbol <- ann$SYMBOL
+
+EnhancedVolcano(ddsCAL29,
+    lab = ddsCAL29$symbol,
+    x = 'log2FoldChange',
+    y = 'pvalue',
+    title = 'Differentially expressed genes in CAL-29',
+    pCutoff = 10e-5,
+    FCcutoff = 2,
+    pointSize = 1.0,
+    legendLabSize = 10,
+    legendIconSize = 3.0,
+    legendPosition = "right",
+    labSize = 2,
+    shape = c(1, 4, 23, 25),
+    colAlpha = 1,
+    axisLabSize = 8,
+    titleLabSize = 15,
+    subtitleLabSize = 8, 
+    captionLabSize = 8,
+    xlim = c(-4,4))
+```
+
+We observe the 2878 upregulated genes on the right part of the graph and the 2193 downregulated genes in the left part of the graph of CAL-29 cells after ILSE1 knockdown.
+
+
+# 3.5. Enriched signalling pathways
+
+## 3.5.1. KEGG pathways
+
+Pathway enrichment analysis helps researchers gain mechanistic insight into gene lists generated from genome-scale (omics) experiments. This method identifies biological pathways that are enriched in a gene list more than would be expected by chance.
+
+In this case, we will use KEGG mapping. This is the process to map molecular genes to molecular relation networks (KEGG pathway maps).
+
+The `sigmet.idx.hs` is an index of numbers of signaling and metabolic pathways in `kegg.set.gs`. In other words, KEGG pathway include other types of pathway definitions, like “Global Map” and “Human Diseases”, which may be undesirable in pathway analysis. Therefore, `kegg.sets.hs[sigmet.idx.hs]` gives you the “cleaner” gene sets of signaling and metabolic pathways only.
+
+```{r, message=FALSE, warning=FALSE}
+library("pathview")
+library("gage")
+library("gageData")
+
+data(kegg.sets.hs)
+data(sigmet.idx.hs)
+
+kegg.sets.hs = kegg.sets.hs[sigmet.idx.hs]
+```
+
+The aim is to find out which pathways are differentially expressed, and check which of this pathways can explain why ILSE1 knockdown blocks the proliferation in Bladder Cancer cells. 
+
+We are going to obtain the intersection of the differentially expressed genes present in 5637 and CAL-29 cells. For that reason we are going to use `intersect` function, and select which genes are present in both cell lines in the  dataframe `Diff5637` and `DiffCAL29` where contains only the differentially expressed genes, with a p-value below 0.05.  This intersection is saved in a new vector `A_GeneNames`. Afterwards we will create new dataframes with just this intersected genes for both cell lines, called `Intersect_5637` and `Intersect_CAL29`. 
+
+```{r}
+A_GeneNames <- (intersect(Diff5637$ENTREZID,DiffCAL29$ENTREZID))
+
+library(dplyr)
+Intersect_5637<- filter(Diff5637, Diff5637$ENTREZID %in% A_GeneNames)
+Intersect_CAL29<- filter(DiffCAL29, DiffCAL29$ENTREZID %in% A_GeneNames)
+```
+
+We need to create a dataframe with the Fold Change (logFC) and the gene name for each cell line. Afterwards, we perform a KEGG pathway analysis through gage function.
+
+```{r}
+FC_5637 = Intersect_5637$logFC
+names(FC_5637) = Intersect_5637$ENTREZID
+head(FC_5637)
+```
+
+As you can observe, `FC_5637` contains the Ensembl ID and the Fold Change. Next, we are going to use `gage` function, which is a method for pathway analysis.     
+
+```{r}
+keggres.fitcont5637 = gage(FC_5637, gsets=kegg.sets.hs, same.dir=TRUE)
+head(keggres.fitcont5637$less, 4)
+```
+
+The pathways most differentially expressed in 5637 are related to protein synthesis, such as Ribosome biogenesis in eukaryotes.
+
+```{r}
+FC_CAL29 = Intersect_CAL29$logFC
+names(FC_CAL29) = Intersect_CAL29$ENTREZID
+head(FC_CAL29)
+
+keggres.fitcontCAL29 = gage(FC_CAL29, gsets=kegg.sets.hs, same.dir=TRUE)
+head(keggres.fitcontCAL29$less, 3)
+```
+
+The pathways most differentially downregulated in CAL-29 are related to protein synthesis, such as Ribosome biogenesis in eukaryotes.
+
+Due to the blocking in the proliferation, we can suggest that there is some downregulated pathway related to cell progression, cell growth or cell survival. For that reason, we want to check which pathways are commonly differentially downregulated in both cell lines. We are going to select the pathways presents in `keggres.fitcont5637$less` and `keggres.fitcontCAL29$less` in new dataframes and check its intersection. 
+
+```{r}
+KEGG_5637 <- data.frame(keggres.fitcont5637$less)
+rownames(KEGG_5637) <- NULL
+KEGG_5637$pathways <- row.names(keggres.fitcont5637$less)
+
+KEGG_CAL29 <- data.frame(keggres.fitcontCAL29$less)
+rownames(KEGG_CAL29) <- NULL
+KEGG_CAL29$pathways <- row.names(keggres.fitcontCAL29$less)
+
+path_intersect1 <- intersect(KEGG_5637$pathways, KEGG_CAL29$pathways)
+head(path_intersect1, 20)
+```
+We observe that the intersected downregulated pathways are related to protein synthesis, such as Ribosome biogenesis in eukaryotes, RNA transport, RNA degradation, Spliceosome, Protein processing in endoplasmic reticulum or mRNA surveillance pathway. Furthermore, the pathway Cell Cycle is related to cell progression. 
+
+These pathways are downregulated after the knockdown of ILSE1, which has sense. Protein synthesis and cell cycle is a key in physiological tasks for cancer cells [1]. After the knockdown of ILSE1 there is a blocking in the proliferation, which blocks cancer cell progression. This explains why the pathways related to cell cycling and protein synthesis are downregulated. 
+
+On the other hand, we can observe that are some pathways downregulated such as ErbB signaling pathway, Jak-STAT signaling pathway or mTOR signaling pathway, which all interconnected by ErbB signaling pathway or more commonly known as EGFR signaling pathway.
+
+
+**HeatMap**
+
+
+
+ 
+
+```{r}
+ErbB_genes <- kegg.sets.hs$`hsa04012 ErbB signaling pathway`
+library(AnnotationDbi)
+logcounts <- cpm(dgeObj,log=TRUE)
+logcounts <- data.frame(logcounts)
+logcounts$SYMBOL = mapIds(org.Hs.eg.db,
+                    keys=row.names(logcounts), 
+                    column="SYMBOL",
+                    keytype="REFSEQ",
+                    multiVals="first")
+logcounts$entrez = mapIds(org.Hs.eg.db,
+                    keys=row.names(logcounts), 
+                    column="ENTREZID",
+                    keytype="REFSEQ",
+                    multiVals="first")
+
+logcounts1 <- logcounts[, c(4,5,6, 1,2,3, 10,11,12, 7,8,9, 13, 14)]#change order of the columns
+
+data_ErbB_genes <- logcounts1[logcounts1$entrez %in% ErbB_genes,]
+SFIo <- as.matrix(apply(data_ErbB_genes[,1:12],2,as.numeric))
+row.names(SFIo) <- data_ErbB_genes$SYMBOL
+#Plot heatmap
+par(mfrow=c(1,2))
+heatmap(SFIo[,1:6], Rowv = NA, Colv = NA, col = heat.colors(256), main = "ErBb pathway for 5637", margins = c(6,8), labCol = c("Ctrl #1","Ctrl #2","Ctrl #3","ILSE1 #1","ILSE1 #2","ILSE1 #3"))
+heatmap(SFIo[,7:12], Rowv = NA, Colv = NA, col = heat.colors(256), main = "ErBb pathway for CAL29", margins = c(6,8), labCol = c("Ctrl #1","Ctrl #2","Ctrl #3","ILSE1 #1","ILSE1 #2","ILSE1 #3"))
+```
+
+
+```{r}
+counts.keepp <- counts.keep
+counts.keepp$SYMBOL = mapIds(org.Hs.eg.db,
+                    keys=row.names(counts.keep), 
+                    column="SYMBOL",
+                    keytype="REFSEQ",
+                    multiVals="first")
+counts.keepp$entrez = mapIds(org.Hs.eg.db,
+                    keys=row.names(counts.keep), 
+                    column="ENTREZID",
+                    keytype="REFSEQ",
+                    multiVals="first")
+
+counts.keepp <- counts.keepp[, c(4,5,6, 1,2,3, 10,11,12, 7,8,9, 13, 14)]#change order of the columns
+data_ErbB_genes <- counts.keepp[counts.keepp$entrez %in% ErbB_genes,]
+
+heatmap5637 <- write.table(data_ErbB_genes, file="/Users/annar/Documents/ordenadorAle/Anna/TFM/data_ErbB_genes_heatmap.txt")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
