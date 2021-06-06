@@ -1,0 +1,13 @@
+;SampleName;cell;treat;totalInfo
+5637_si270_1;5637_si270_1;5637;trt;5637trt
+5637_si270_2;5637_si270_2;5637;trt;5637trt
+5637_si270_3;5637_si270_3;5637;trt;5637trt
+5637_siCtrl438_1;5637_siCtrl438_1;5637;untrt;5637untrt
+5637_siCtrl438_2;5637_siCtrl438_2;5637;untrt;5637untrt
+5637_siCtrl438_3;5637_siCtrl438_3;5637;untrt;5637untrt
+Cal29_si270_1;Cal29_si270_1;CAL29;trt;CAL29trt
+Cal29_si270_2;Cal29_si270_2;CAL29;trt;CAL29trt
+Cal29_si270_3;Cal29_si270_3;CAL29;trt;CAL29trt
+Cal29_siCtrl438_1;Cal29_siCtrl438_1;CAL29;untrt;CAL29untrt
+Cal29_siCtrl438_2;Cal29_siCtrl438_2;CAL29;untrt;CAL29untrt
+Cal29_siCtrl438_3;Cal29_siCtrl438_3;CAL29;untrt;CAL29untrt
